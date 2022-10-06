@@ -1,0 +1,9 @@
+{
+  "mongoDb": {
+    "host": "MONGODB_HOST",
+    "port": "MONGODB_PORT",
+    "dbName": "MONGODB_DB_NAME",
+    "username": "MONGODB_USERNAME",
+    "password": "MONGODB_PASSWORD"
+  }
+}

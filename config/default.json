@@ -1,0 +1,9 @@
+{
+  "mongoDb": {
+    "host": "localhost",
+    "port": 27017,
+    "dbName": "rewind",
+    "username": "root",
+    "password": "example"
+  }
+}
