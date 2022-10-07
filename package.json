@@ -1,6 +1,6 @@
 {
   "name": "@rewind-media/rewind-cron",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "AGPLv3",
   "description": "Background cron job for Rewind.",
   "repository": {
@@ -40,8 +40,7 @@
     "clean": "rm -rf build",
     "pub": "npm version patch && npm publish"
   },
-  "eslintConfig": {
-  },
+  "eslintConfig": {},
   "devDependencies": {
     "@types/express-session": "^1.17.5",
     "@types/passport": "^1.0.9",
