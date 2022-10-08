@@ -38,7 +38,7 @@
     "_copy": "cp -r config dist",
     "build": "npm run _build && npm run _copy",
     "clean": "rm -rf build",
-    "pub": "npm version patch && npm publish"
+    "pub": "npm run clean && npm run build && npm version patch && npm publish"
   },
   "eslintConfig": {},
   "devDependencies": {
