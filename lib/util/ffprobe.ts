@@ -1,9 +1,9 @@
 import { spawn } from "child_process";
 import { FFProbeResult } from "ffprobe";
 import { Stream } from "stream";
-import {CronLogger} from "../log";
+import { CronLogger } from "../log";
 
-const log = CronLogger.getChildCategory("ffmpeg.prob");
+const log = CronLogger.getChildCategory("ffmpeg.probe");
 
 export interface FfProbeInfoFormat {
   duration?: number;
@@ -15,6 +15,7 @@ export interface FfProbeInfo extends FFProbeResult {
 }
 
 export function getInfo(filePath: string): Promise<FfProbeInfo> {
+  log.info(`Ffprobing ${filePath}`);
   return new Promise((resolve, reject) => {
     const params = [
       "-show_streams",

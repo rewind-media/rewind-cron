@@ -7,8 +7,18 @@ import { Dirent } from "fs";
 import { Database, hash } from "@rewind-media/rewind-common";
 import { CronLogger } from "../log";
 import { Library, ShowSeasonInfo } from "@rewind-media/rewind-protocol";
-import { first, sum, any, max, flow, identity, filter, map } from "lodash/fp";
-import { mapSeries } from "cantaloupe";
+import {
+  any,
+  filter,
+  first,
+  flow,
+  identity,
+  map,
+  max,
+  sum,
+  negate,
+} from "lodash/fp";
+import { filterNotNil, mapSeries } from "cantaloupe";
 
 const log = CronLogger.getChildCategory("ShowScanner");
 
@@ -58,16 +68,12 @@ export class ShowScanner extends Scanner {
     })(this.library.rootPaths)
       .then(sum)
       .then((upsertedRows) =>
-        this.db
-          .cleanShowEpisodes(start, this.library.name)
-          .then(() =>
-            Promise.all([
-              this.db.cleanShowSeasons(start, this.library.name),
-              this.db.cleanShows(start, this.library.name),
-              this.db.cleanImages(start, this.library.name), // image file resources (season images, etc)
-            ])
-          )
-          .then(() => upsertedRows)
+        Promise.all([
+          this.db.cleanShowEpisodes(start, this.library.name),
+          this.db.cleanShowSeasons(start, this.library.name),
+          this.db.cleanShows(start, this.library.name),
+          this.db.cleanImages(start, this.library.name), // image file resources (season images, etc)
+        ]).then(() => upsertedRows)
       )
       .then((it) => {
         log.info(`Finished scanning ${this.library.name}`);
@@ -92,17 +98,17 @@ export class ShowScanner extends Scanner {
           this.scanSeason(showId, Path.resolve(path, dirEntry.name))
         )(dirEntries)
           .then(sum)
-          .then((count) => {
+          .then(async (count) => {
             if (count > 0) {
-              return this.db
-                .upsertShow({
-                  id: showId,
-                  showName: showName,
-                  libraryName: this.library.name,
-                })
-                .then(() => count);
+              await this.db.upsertShow({
+                id: showId,
+                showName: showName,
+                libraryName: this.library.name,
+                lastUpdated: new Date(),
+              });
+              return count;
             } else {
-              return new Promise<number>((resolve, reject) => resolve(count));
+              return count;
             }
           })
           .catch((reason) => {
@@ -119,43 +125,44 @@ export class ShowScanner extends Scanner {
     log.info(`Scanning ${seasonPath} - season: ${seasonId}`);
     return this.separateSeasonFiles(seasonPath).then(
       ({ metadataFiles, dataFiles }) =>
-        mapSeries((episodeFileSet: EpisodeFileSet) => {
-          return this.db
-            .upsertShowEpisode({
-              id: hash.mkFileId(
-                episodeFileSet.video.dirent.name,
-                this.library.name
-              ),
-              name: episodeFileSet.baseName,
-              showId: showId,
-              seasonId: seasonId,
-              lastUpdated: new Date(),
-              path: Path.resolve(seasonPath, episodeFileSet.video.dirent.name),
-              libraryName: this.library.name,
-              info: episodeFileSet.video.ffProbeInfo,
-            })
-            .then((res) => (res ? 1 : 0));
-        })(dataFiles.episodeFiles)
+        this.scanDataFiles(dataFiles, showId, seasonId, seasonPath)
           .then(sum)
-          .then((count) => {
-            return new Promise<number>((resolve, reject) => {
-              if (count > 0) {
-                return this.persistSeasonMetadata(
-                  showId,
-                  seasonPath,
-                  seasonId,
-                  metadataFiles
-                )
-                  .catch((e) =>
-                    log.error(`Error persisting season metadata ${e}`)
-                  )
-                  .then(() => resolve(count));
-              } else {
-                resolve(count);
-              }
-            });
+          .then(async (count) => {
+            if (count > 0) {
+              await this.persistSeasonMetadata(
+                showId,
+                seasonPath,
+                seasonId,
+                metadataFiles
+              ).catch((e) =>
+                log.error(`Error persisting season metadata ${e}`)
+              );
+            }
+            return count;
           })
     );
+  }
+
+  private scanDataFiles(
+    dataFiles: DataFiles,
+    showId: string,
+    seasonId: string,
+    seasonPath: string
+  ) {
+    return mapSeries((episodeFileSet: EpisodeFileSet) => {
+      return this.db
+        .upsertShowEpisode({
+          id: episodeFileSet.video.id,
+          name: episodeFileSet.baseName,
+          showId: showId,
+          seasonId: seasonId,
+          lastUpdated: new Date(),
+          path: Path.resolve(seasonPath, episodeFileSet.video.dirent.name),
+          libraryName: this.library.name,
+          info: episodeFileSet.video.ffProbeInfo,
+        })
+        .then((res) => (res ? 1 : 0));
+    })(dataFiles.episodeFiles);
   }
 
   persistSeasonMetadata(
@@ -174,12 +181,13 @@ export class ShowScanner extends Scanner {
       : null;
 
     return Promise.all(filter(identity)([folderImageProm])).then((it) => {
-      const showSeasonInfo = {
+      const showSeasonInfo: ShowSeasonInfo = {
         showId: showId,
         seasonName: seasonName,
         libraryName: this.library.name,
         id: hash.mkFileId(seasonPath, this.library.name),
         folderImageId: folderImageInfo?.id,
+        lastUpdated: new Date(),
       };
 
       return this.db.upsertShowSeason(showSeasonInfo).then((it) => {
@@ -219,37 +227,67 @@ export class ShowScanner extends Scanner {
           (it) => it.isFile() && !Object.values(metadataFiles).includes(it)
         );
 
-        return mapSeries((it: Dirent) => {
-          const absPath = Path.resolve(seasonPath, it.name);
-          return getInfo(absPath)
-            .then((ffProbeInfo) => {
-              return { dirent: it, ffProbeInfo: ffProbeInfo } as VideoFile;
-            })
-            .catch((err) => {
-              log.error(
-                `Error scanning possible video file at ${absPath}: ${err}`
+        return flow(
+          filter(
+            negate((it: Dirent) => {
+              const parsedPath = Path.parse(it.name);
+              return (
+                ShowScanner.isNfoFile(parsedPath) ||
+                ShowScanner.isSubtitlesFile(parsedPath) ||
+                ShowScanner.isImageFile(parsedPath)
               );
-            });
-        })(remainingFiles).then((files) => {
-          const videoFiles = flow(
-            filter(identity), // TODO filterNotVoid
-            filter<VideoFile>((it) => isVideo(it.ffProbeInfo))
-          )(files);
+            })
+          ),
+          mapSeries(async (it: Dirent) => {
+            const absPath = Path.resolve(seasonPath, it.name);
+            const id = hash.mkFileId(absPath, this.library.name);
+            const lastModified = await fs
+              .stat(absPath)
+              .then(
+                (stat) =>
+                  new Date(
+                    Math.max(stat.mtimeMs, stat.ctimeMs, stat.birthtimeMs)
+                  )
+              );
+            log.debug(`${absPath} was last modified ${lastModified}`);
 
-          return this.extractEpisodeFileSet(
-            metadataFiles,
-            videoFiles,
-            remainingFiles
-          );
-        });
+            return this.db.getShowEpisode(id).then((episodeInfo) =>
+              episodeInfo && episodeInfo.lastUpdated > lastModified
+                ? Promise.resolve(mkVideoFile(id, it, episodeInfo.info, false))
+                : getInfo(absPath)
+                    .then((ffProbeInfo) =>
+                      mkVideoFile(id, it, ffProbeInfo, true)
+                    )
+                    .catch((err) => {
+                      log.error(
+                        `Error scanning possible video file at ${absPath}: ${err}`
+                      );
+                      return null;
+                    })
+            );
+          })
+        )(remainingFiles)
+          .then(filterNotNil)
+          .then((files: VideoFile[]) => {
+            const videoFiles = flow(
+              filter(identity), // TODO filterNotVoid
+              filter<VideoFile>((it) => isVideo(it.ffProbeInfo))
+            )(files);
+
+            return this.extractSeasonFiles(
+              metadataFiles,
+              videoFiles,
+              remainingFiles
+            );
+          });
       });
   }
 
-  private extractEpisodeFileSet(
+  private extractSeasonFiles(
     metadataFiles: MetadataFiles,
     videoFiles: Awaited<VideoFile>[],
     remainingFiles: Dirent[]
-  ) {
+  ): SeasonFiles {
     return {
       metadataFiles: metadataFiles,
       dataFiles: {
@@ -304,9 +342,22 @@ export class ShowScanner extends Scanner {
       const parsedPath = Path.parse(it.name);
       return (
         parsedPath.name.startsWith(videoParsePath.name) &&
-        parsedPath.ext.toLowerCase() == "srt"
+        ShowScanner.isSubtitlesFile(parsedPath)
       ); // TODO support other subtitles too
     });
+  }
+
+  private static isSubtitlesFile(parsedPath: ParsedPath) {
+    return parsedPath.ext.toLowerCase() == ".srt"; // TODO support other subtitles too
+  }
+
+  private static isNfoFile(parsedPath: ParsedPath) {
+    return parsedPath.ext.toLowerCase() == ".nfo";
+  }
+
+  private static isImageFile(parsedPath: ParsedPath) {
+    const ext = parsedPath.ext.toLowerCase();
+    return ext == ".jpg" || ext == ".jpeg" || ext == ".png";
   }
 
   private static getNfoFile(
@@ -318,7 +369,7 @@ export class ShowScanner extends Scanner {
         const parsedPath = Path.parse(it.name);
         return (
           parsedPath.name == videoParsePath.name &&
-          parsedPath.ext.toLowerCase() == ".nfo"
+          ShowScanner.isNfoFile(parsedPath)
         );
       })(remainingFiles)
     );
@@ -344,6 +395,17 @@ interface EpisodeFileSet {
 }
 
 interface VideoFile {
+  id: string;
   dirent: Dirent;
   ffProbeInfo: FfProbeInfo;
+  changed: boolean;
+}
+
+function mkVideoFile(
+  id: string,
+  dirent: Dirent,
+  ffProbeInfo: FfProbeInfo,
+  changed: boolean
+): VideoFile {
+  return { id: id, dirent: dirent, ffProbeInfo: ffProbeInfo, changed: changed };
 }
