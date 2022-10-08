@@ -6,7 +6,11 @@ import { FFProbeStream } from "ffprobe";
 import { Dirent } from "fs";
 import { Database, hash } from "@rewind-media/rewind-common";
 import { CronLogger } from "../log";
-import { Library, ShowSeasonInfo } from "@rewind-media/rewind-protocol";
+import {
+  ImageInfo,
+  Library,
+  ShowSeasonInfo,
+} from "@rewind-media/rewind-protocol";
 import {
   any,
   filter,
@@ -15,10 +19,12 @@ import {
   identity,
   map,
   max,
-  sum,
   negate,
+  sum,
 } from "lodash/fp";
-import { filterNotNil, mapSeries } from "cantaloupe";
+import { emptyPromise, filterNotNil, mapSeries } from "cantaloupe";
+import { mkFileId } from "@rewind-media/rewind-common/dist/util/hash";
+import { isNotNil } from "cantaloupe/dist/functions";
 
 const log = CronLogger.getChildCategory("ShowScanner");
 
@@ -92,32 +98,81 @@ export class ShowScanner extends Scanner {
 
     return fs
       .readdir(path, { withFileTypes: true })
-      .then(filter((dirEntry) => dirEntry.isDirectory()))
-      .then((dirEntries) =>
-        mapSeries((dirEntry: Dirent) =>
-          this.scanSeason(showId, Path.resolve(path, dirEntry.name))
-        )(dirEntries)
+      .then(async (dirEntries) => {
+        const dirs = dirEntries.filter((dirEntry) => dirEntry.isDirectory());
+        const count = await mapSeries((dir: Dirent) =>
+          this.scanSeason(showId, Path.resolve(path, dir.name))
+        )(dirs)
           .then(sum)
-          .then(async (count) => {
-            if (count > 0) {
-              await this.db.upsertShow({
-                id: showId,
-                showName: showName,
-                libraryName: this.library.name,
-                lastUpdated: new Date(),
-              });
-              return count;
-            } else {
-              return count;
-            }
-          })
           .catch((reason) => {
             log.error(
               `Error scanning show in ${this.library.name}: ${rootPath}/${showName}: ${reason}`
             );
             return 0;
-          })
-      );
+          });
+        if (count > 0) {
+          const seriesImageInfo = this.extractImageInfo(
+            dirEntries,
+            path,
+            "folder"
+          );
+
+          const bannerImageInfo = first(
+            flow(
+              map((name: string) =>
+                this.extractImageInfo(dirEntries, path, name)
+              ),
+              filterNotNil
+            )(["backdrop", "banner"])
+          );
+
+          await mapSeries((it: ImageInfo) => this.db.upsertImage(it))(
+            filterNotNil([bannerImageInfo, seriesImageInfo])
+          );
+
+          await this.db.upsertShow({
+            id: showId,
+            showName: showName,
+            libraryName: this.library.name,
+            lastUpdated: new Date(),
+            seriesImageId: seriesImageInfo?.id,
+            seriesBackdropImageId: bannerImageInfo?.id,
+          });
+          return count;
+        } else {
+          return count;
+        }
+      });
+  }
+
+  private extractImageInfo(
+    dirEntries: Dirent[],
+    path: string,
+    imageName: string
+  ): ImageInfo | undefined {
+    const seriesImage = dirEntries
+      .filter((it) => it.isFile())
+      .find((ent) => {
+        const parsed = Path.parse(ent.name);
+        return (
+          parsed.name == imageName &&
+          ShowScanner.imageFileExtensions.includes(parsed.ext)
+        );
+      });
+    const seriesImagePath = seriesImage
+      ? Path.resolve(path, seriesImage.name)
+      : undefined;
+    const seriesImageInfo =
+      seriesImage && seriesImagePath
+        ? {
+            name: seriesImage.name,
+            id: mkFileId(seriesImagePath, this.library.name),
+            path: seriesImagePath,
+            libraryName: this.library.name,
+            lastUpdated: new Date(),
+          }
+        : undefined;
+    return seriesImageInfo;
   }
 
   private scanSeason(showId: string, seasonPath: string): Promise<number> {
@@ -149,7 +204,10 @@ export class ShowScanner extends Scanner {
     seasonId: string,
     seasonPath: string
   ) {
-    return mapSeries((episodeFileSet: EpisodeFileSet) => {
+    return mapSeries(async (episodeFileSet: EpisodeFileSet) => {
+      if (episodeFileSet.image) {
+        await this.db.upsertImage(episodeFileSet.image);
+      }
       return this.db
         .upsertShowEpisode({
           id: episodeFileSet.video.id,
@@ -160,6 +218,7 @@ export class ShowScanner extends Scanner {
           path: Path.resolve(seasonPath, episodeFileSet.video.dirent.name),
           libraryName: this.library.name,
           info: episodeFileSet.video.ffProbeInfo,
+          episodeImageId: episodeFileSet.image?.id,
         })
         .then((res) => (res ? 1 : 0));
     })(dataFiles.episodeFiles);
@@ -173,20 +232,15 @@ export class ShowScanner extends Scanner {
   ): Promise<ShowSeasonInfo> {
     const seasonName = Path.parse(seasonPath).name;
 
-    const folderImageInfo = metadataFiles.folderImage
-      ? this.mkFolderImageInfo(metadataFiles.folderImage, seasonPath)
-      : null;
-    const folderImageProm = folderImageInfo
-      ? this.db.upsertImage(folderImageInfo)
-      : null;
-
-    return Promise.all(filter(identity)([folderImageProm])).then((it) => {
+    return mapSeries((it: ImageInfo) => this.db.upsertImage(it))(
+      filterNotNil([metadataFiles.folderImage])
+    ).then(() => {
       const showSeasonInfo: ShowSeasonInfo = {
         showId: showId,
         seasonName: seasonName,
         libraryName: this.library.name,
         id: hash.mkFileId(seasonPath, this.library.name),
-        folderImageId: folderImageInfo?.id,
+        folderImageId: metadataFiles.folderImage?.id,
         lastUpdated: new Date(),
       };
 
@@ -203,25 +257,14 @@ export class ShowScanner extends Scanner {
     });
   }
 
-  private mkFolderImageInfo(folderImage: Dirent, seasonPath: string) {
-    const path = Path.resolve(seasonPath, folderImage.name);
-    return {
-      id: hash.mkFileId(path, this.library.name),
-      name: folderImage.name,
-      lastUpdated: new Date(),
-      path: path,
-      libraryName: this.library.name,
-    };
-  }
-
-  static imageFileExtensions = [".png", ".jpg", ".jpeg"];
-
   separateSeasonFiles(seasonPath: string): Promise<SeasonFiles> {
     return fs
       .readdir(seasonPath, { withFileTypes: true })
-      .then((dirEntries) => {
-        const metadataFiles: MetadataFiles =
-          this.getSeasonMetadataFiles(dirEntries);
+      .then(async (dirEntries) => {
+        const metadataFiles: MetadataFiles = await this.getSeasonMetadataFiles(
+          dirEntries,
+          seasonPath
+        );
 
         const remainingFiles = dirEntries.filter(
           (it) => it.isFile() && !Object.values(metadataFiles).includes(it)
@@ -302,36 +345,63 @@ export class ShowScanner extends Scanner {
             videoParsePath
           );
 
+          const image = metadataFiles.metadataFolder
+            ? this.extractImageInfo(
+                metadataFiles.metadataFolder.entries,
+                metadataFiles.metadataFolder.path,
+                videoParsePath.name
+              )
+            : undefined;
+
           return {
             baseName: videoParsePath.name,
             video: videoFile,
             subtitles: subtitles,
             nfo: nfoFile,
+            image: image,
           };
         }),
       },
     };
   }
 
-  private getSeasonMetadataFiles(dirEntries: Dirent[]) {
-    const folderImage = first(
-      flow(
-        filter<Dirent>((it) => it.isFile()),
-        filter((it) => {
-          const parsedPath = Path.parse(it.name);
-          return (
-            parsedPath.name.toLowerCase() == "folder" &&
-            ShowScanner.imageFileExtensions.includes(
-              parsedPath.ext.toLowerCase()
-            )
-          );
-        })
-      )(dirEntries)
+  private getSeasonMetadataFiles(
+    dirEntries: Dirent[],
+    seasonPath: string
+  ): Promise<MetadataFiles> {
+    return this.getSeasonMetadataFolder(dirEntries, seasonPath).then(
+      (metadataFolder) => {
+        return {
+          folderImage: this.extractImageInfo(dirEntries, seasonPath, "folder"),
+          metadataFolder: metadataFolder,
+        };
+      }
     );
+  }
 
-    return {
-      folderImage: folderImage,
-    };
+  private async getSeasonMetadataFolder(
+    seasonFolderEntries: Dirent[],
+    seasonPath: string
+  ): Promise<MetadataFolder | undefined> {
+    if (
+      seasonFolderEntries.find(
+        (it) => it.name == "metadata" && it.isDirectory()
+      )
+    ) {
+      const path = Path.resolve(seasonPath, "metadata");
+      return await fs
+        .readdir(path, {
+          withFileTypes: true,
+        })
+        .then((entries) => {
+          return {
+            entries: entries,
+            path: path,
+          };
+        });
+    } else {
+      return emptyPromise();
+    }
   }
 
   private static getSubtitles(
@@ -355,9 +425,11 @@ export class ShowScanner extends Scanner {
     return parsedPath.ext.toLowerCase() == ".nfo";
   }
 
+  static imageFileExtensions = [".png", ".jpg", ".jpeg"];
+
   private static isImageFile(parsedPath: ParsedPath) {
     const ext = parsedPath.ext.toLowerCase();
-    return ext == ".jpg" || ext == ".jpeg" || ext == ".png";
+    return ShowScanner.imageFileExtensions.includes(ext);
   }
 
   private static getNfoFile(
@@ -375,13 +447,20 @@ export class ShowScanner extends Scanner {
     );
   }
 }
+
 interface SeasonFiles {
   metadataFiles: MetadataFiles;
   dataFiles: DataFiles;
 }
 
 interface MetadataFiles {
-  folderImage?: Dirent;
+  folderImage?: ImageInfo;
+  metadataFolder?: MetadataFolder;
+}
+
+interface MetadataFolder {
+  path: string;
+  entries: Dirent[];
 }
 interface DataFiles {
   episodeFiles: EpisodeFileSet[];
@@ -392,6 +471,7 @@ interface EpisodeFileSet {
   video: VideoFile;
   subtitles: Dirent[];
   nfo?: Dirent;
+  image?: ImageInfo;
 }
 
 interface VideoFile {
