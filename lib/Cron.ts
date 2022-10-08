@@ -4,33 +4,31 @@ import { ShowScanner } from "./scanner/ShowScanner";
 import { CronLogger as log } from "./log";
 import { Library, LibraryType } from "@rewind-media/rewind-protocol";
 import { Database } from "@rewind-media/rewind-common";
-import { filter, flow, identity, map } from "lodash/fp";
-import { Scanner } from "./scanner/models";
+import { flow, map } from "lodash/fp";
+import { filterNotNil, mapSeries } from "cantaloupe";
 
 export function runCron(db: Database) {
   return new CronJob(
     "* * * 2 * *",
     () =>
       db.listLibraries().then((libraries) =>
-        Promise.all(
-          flow(
-            map((library: Library) => {
-              switch (library.type) {
-                case LibraryType.File:
-                  return new FileScanner(library, db);
-                case LibraryType.Show:
-                  return new ShowScanner(library, db);
-                default:
-                  log.warn(
-                    `Unknown LibraryType '${library.type}' when scanning ${library.name}`
-                  );
-                  return null;
-              }
-            }),
-            filter<Scanner>(identity),
-            map((scanner: Scanner) => scanner.scan())
-          )(libraries)
-        )
+        flow(
+          map((library: Library) => {
+            switch (library.type) {
+              case LibraryType.File:
+                return new FileScanner(library, db);
+              case LibraryType.Show:
+                return new ShowScanner(library, db);
+              default:
+                log.warn(
+                  `Unknown LibraryType '${library.type}' when scanning ${library.name}`
+                );
+                return null;
+            }
+          }),
+          filterNotNil,
+          mapSeries((scanner) => scanner.scan())
+        )(libraries)
       ),
     null,
     true,
