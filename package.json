@@ -13,8 +13,8 @@
   "private": false,
   "dependencies": {
     "@jsbits/escape-regex-str": "^1.0.3",
-    "@rewind-media/rewind-common": "^0.1.37",
-    "@rewind-media/rewind-protocol": "^0.1.8",
+    "@rewind-media/rewind-common": "^0.1.38",
+    "@rewind-media/rewind-protocol": "^0.1.10",
     "@types/config": "^0.0.41",
     "@types/cron": "^2.0.0",
     "@types/klaw": "^3.0.3",
@@ -34,7 +34,7 @@
   },
   "scripts": {
     "prettier": "npx prettier --write .",
-    "update": "npm update --save && git add package.json && git commit -m 'Dependency updates'",
+    "update": "npm update --save && ((! git diff --exit-code package.json > /dev/null && git add package.json && git commit -m 'Dependency updates') || true)",
     "start": "cd dist && node main.js",
     "_build": "tsc",
     "_copy": "cp -r config dist",
