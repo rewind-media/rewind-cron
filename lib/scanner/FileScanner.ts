@@ -1,8 +1,8 @@
 import Path from "path";
 import { Scanner } from "./models";
-import {Database, hash} from "@rewind-media/rewind-common";
-import klaw, {Item} from "klaw";
-import {Library} from "@rewind-media/rewind-protocol";
+import { Database, hash } from "@rewind-media/rewind-common";
+import klaw, { Item } from "klaw";
+import { Library } from "@rewind-media/rewind-protocol";
 
 export class FileScanner extends Scanner {
   constructor(library: Library, db: Database) {
@@ -11,8 +11,8 @@ export class FileScanner extends Scanner {
 
   scan(): Promise<number> {
     const start = new Date();
-    return Promise.all(this.library.rootPaths
-      .map(async (rootPath) => {
+    return Promise.all(
+      this.library.rootPaths.map(async (rootPath) => {
         const walker = klaw(rootPath);
         walker.on("data", async (item) => {
           walker.pause();
@@ -24,7 +24,8 @@ export class FileScanner extends Scanner {
             resolve(null);
           });
         });
-      }))
+      })
+    )
       .then(() => this.db.cleanShows(start, this.library.name))
       .then(() => 1);
   }

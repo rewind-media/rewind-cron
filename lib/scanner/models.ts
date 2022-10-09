@@ -1,4 +1,4 @@
-import {Database} from "@rewind-media/rewind-common";
+import { Database } from "@rewind-media/rewind-common";
 import { Library } from "@rewind-media/rewind-protocol";
 
 export abstract class Scanner {
