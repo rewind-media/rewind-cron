@@ -23,6 +23,7 @@
     "cantaloupe": "^0.1.6",
     "config": "^3.3.8",
     "cron": "^2.1.0",
+    "fast-xml-parser": "^4.0.11",
     "ffprobe": "^1.1.2",
     "fs-extra": "^10.1.0",
     "klaw": "^4.0.1",
@@ -52,5 +53,10 @@
     "html-webpack-plugin": "^5.5.0",
     "prettier": "^2.7.1",
     "style-loader": "^3.3.1"
-  }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "./dist/**"
+  ]
 }

@@ -1,6 +1,6 @@
 import Path from "path";
 import { Scanner } from "./models";
-import { Database, hash } from "@rewind-media/rewind-common";
+import { Database, mkFileId } from "@rewind-media/rewind-common";
 import klaw, { Item } from "klaw";
 import { Library } from "@rewind-media/rewind-protocol";
 
@@ -36,7 +36,7 @@ export class FileScanner extends Scanner {
       lastUpdated: new Date(),
       libraryName: this.library.name,
       name: Path.basename(item.path),
-      id: hash.mkFileId(item.path, this.library.name),
+      id: mkFileId(item.path, this.library.name),
     });
   }
 }
