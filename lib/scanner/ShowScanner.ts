@@ -12,6 +12,7 @@ import {
   ShowSeasonInfo,
   EpisodeDetails,
   SeasonDetails,
+  SeriesDetails,
 } from "@rewind-media/rewind-protocol";
 import {
   any,
@@ -132,6 +133,8 @@ export class ShowScanner extends Scanner {
             filterNotNil([bannerImageInfo, seriesImageInfo])
           );
 
+          const showDetails = await this.extractSeriesDetails(dirEntries, path);
+
           await this.db.upsertShow({
             id: showId,
             showName: showName,
@@ -139,6 +142,7 @@ export class ShowScanner extends Scanner {
             lastUpdated: new Date(),
             seriesImageId: seriesImageInfo?.id,
             seriesBackdropImageId: bannerImageInfo?.id,
+            details: showDetails,
           });
           return count;
         } else {
@@ -471,9 +475,9 @@ export class ShowScanner extends Scanner {
   }
 
   private async parseEpisodeNfo(
-    nfo: string
+    nfoPath: string
   ): Promise<EpisodeDetails | undefined> {
-    const strNfo = await fs.readFile(nfo, "utf8");
+    const strNfo = await fs.readFile(nfoPath, "utf8");
     return (
       this.xmlParser.parse(strNfo) as {
         episodedetails?: EpisodeDetails;
@@ -490,6 +494,31 @@ export class ShowScanner extends Scanner {
         season?: SeasonDetails;
       }
     )?.season;
+  }
+
+  private async extractSeriesDetails(
+    dirEntries: Dirent[],
+    path: string
+  ): Promise<SeriesDetails | undefined> {
+    const nfoFile = first(
+      dirEntries.filter(
+        (it) => it.isFile() && it.name.toLowerCase() == "tvshow.nfo"
+      )
+    );
+    return nfoFile
+      ? this.parseSeriesNfo(Path.resolve(path, nfoFile.name))
+      : undefined;
+  }
+
+  private async parseSeriesNfo(
+    nfoPath: string
+  ): Promise<SeriesDetails | undefined> {
+    const strNfo = await fs.readFile(nfoPath, "utf8");
+    return (
+      this.xmlParser.parse(strNfo) as {
+        tvshow?: SeriesDetails;
+      }
+    )?.tvshow;
   }
 }
 
