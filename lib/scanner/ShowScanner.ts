@@ -9,10 +9,11 @@ import { CronLogger } from "../log";
 import {
   ImageInfo,
   Library,
-  ShowSeasonInfo,
+  ShowInfo,
   EpisodeDetails,
   SeasonDetails,
   SeriesDetails,
+  SeasonInfo,
 } from "@rewind-media/rewind-protocol";
 import {
   any,
@@ -78,8 +79,8 @@ export class ShowScanner extends Scanner {
       .then(sum)
       .then((upsertedRows) =>
         Promise.all([
-          this.db.cleanShowEpisodes(start, this.library.name),
-          this.db.cleanShowSeasons(start, this.library.name),
+          this.db.cleanEpisodes(start, this.library.name),
+          this.db.cleanSeasons(start, this.library.name),
           this.db.cleanShows(start, this.library.name),
           this.db.cleanImages(start, this.library.name), // image file resources (season images, etc)
         ]).then(() => upsertedRows)
@@ -221,7 +222,7 @@ export class ShowScanner extends Scanner {
         : undefined;
 
       return this.db
-        .upsertShowEpisode({
+        .upsertEpisode({
           id: episodeFileSet.video.id,
           name: episodeFileSet.baseName,
           showId: showId,
@@ -242,13 +243,13 @@ export class ShowScanner extends Scanner {
     seasonPath: string,
     seasonId: string,
     metadataFiles: MetadataFiles
-  ): Promise<ShowSeasonInfo> {
+  ): Promise<SeasonInfo> {
     const seasonName = Path.parse(seasonPath).name;
     if (metadataFiles.folderImage) {
       await this.db.upsertImage(metadataFiles.folderImage);
     }
 
-    const showSeasonInfo: ShowSeasonInfo = {
+    const seasonInfo: SeasonInfo = {
       showId: showId,
       seasonName: seasonName,
       libraryName: this.library.name,
@@ -261,14 +262,13 @@ export class ShowScanner extends Scanner {
           )
         : undefined,
     };
-    const result = await this.db.upsertShowSeason(showSeasonInfo);
+    const result = await this.db.upsertSeason(seasonInfo);
 
     if (result) {
-      return showSeasonInfo;
+      return seasonInfo;
     } else {
       throw Error(
-        "Failed to upsert show season in database" +
-          JSON.stringify(showSeasonInfo)
+        "Failed to upsert show season in database" + JSON.stringify(seasonInfo)
       );
     }
   }
@@ -310,7 +310,7 @@ export class ShowScanner extends Scanner {
               );
             log.debug(`${absPath} was last modified ${lastModified}`);
 
-            return this.db.getShowEpisode(id).then((episodeInfo) =>
+            return this.db.getEpisode(id).then((episodeInfo) =>
               episodeInfo && episodeInfo.lastUpdated > lastModified
                 ? Promise.resolve(mkVideoFile(id, it, episodeInfo.info, false))
                 : getInfo(absPath)
