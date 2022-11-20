@@ -32,7 +32,9 @@ export class FileScanner extends Scanner {
 
   private handleItem(item: Item): Promise<boolean> {
     return this.db.upsertFile({
-      path: item.path,
+      location: {
+        localPath: item.path,
+      },
       lastUpdated: new Date(),
       libraryName: this.library.name,
       name: Path.basename(item.path),

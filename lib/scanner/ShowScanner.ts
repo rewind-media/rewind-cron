@@ -174,7 +174,9 @@ export class ShowScanner extends Scanner {
         ? {
             name: seriesImage.name,
             id: mkFileId(seriesImagePath, this.library.name),
-            path: seriesImagePath,
+            location: {
+              localPath: seriesImagePath,
+            },
             libraryName: this.library.name,
             lastUpdated: new Date(),
           }
@@ -228,7 +230,12 @@ export class ShowScanner extends Scanner {
           showId: showId,
           seasonId: seasonId,
           lastUpdated: new Date(),
-          path: Path.resolve(seasonPath, episodeFileSet.video.dirent.name),
+          location: {
+            localPath: Path.resolve(
+              seasonPath,
+              episodeFileSet.video.dirent.name
+            ),
+          },
           libraryName: this.library.name,
           info: episodeFileSet.video.ffProbeInfo,
           episodeImageId: episodeFileSet.image?.id,
