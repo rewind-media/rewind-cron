@@ -222,7 +222,6 @@ export class ShowScanner extends Scanner {
             Path.resolve(seasonPath, episodeFileSet.nfo.name)
           )
         : undefined;
-
       return this.db
         .upsertEpisode({
           id: episodeFileSet.video.id,
@@ -239,6 +238,14 @@ export class ShowScanner extends Scanner {
           libraryName: this.library.name,
           info: episodeFileSet.video.ffProbeInfo,
           episodeImageId: episodeFileSet.image?.id,
+          subtitleFiles: episodeFileSet.subtitles.map((it) => {
+            return {
+              name: it.name,
+              location: {
+                localPath: Path.resolve(seasonPath, it.name),
+              },
+            };
+          }),
           details: details,
         })
         .then((res) => (res ? 1 : 0));
@@ -275,7 +282,7 @@ export class ShowScanner extends Scanner {
       return seasonInfo;
     } else {
       throw Error(
-        "Failed to upsert show season in database" + JSON.stringify(seasonInfo)
+        "Failed to upsert show season in database " + JSON.stringify(seasonInfo)
       );
     }
   }
