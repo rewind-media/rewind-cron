@@ -44,7 +44,9 @@ function extractDuration(ffProbeInfo: FfProbeInfo): number {
         map<FFProbeStream, number | undefined>((it) => it.duration),
         filter<number>(identity)
       )(ffProbeInfo.streams)
-    ) ?? 0
+    ) ??
+    ffProbeInfo.format.duration ??
+    0
   );
 }
 
