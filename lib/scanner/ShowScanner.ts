@@ -9,7 +9,6 @@ import { CronLogger } from "../log";
 import {
   ImageInfo,
   Library,
-  ShowInfo,
   EpisodeDetails,
   SeasonDetails,
   SeriesDetails,

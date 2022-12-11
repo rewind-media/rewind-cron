@@ -19,7 +19,7 @@ export class FileScanner extends Scanner {
           await this.handleItem(item);
           walker.resume();
         });
-        return await new Promise<null>((resolve, reject) => {
+        return await new Promise<null>((resolve) => {
           walker.on("end", () => {
             resolve(null);
           });
