@@ -1,6 +1,6 @@
 {
   "name": "@rewind-media/rewind-cron",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "license": "AGPLv3",
   "description": "Background cron job for Rewind.",
   "repository": {
