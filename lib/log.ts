@@ -1,3 +1,3 @@
-import { RootLogger } from "@rewind-media/rewind-common/dist/util";
+import { RootLogger } from "@rewind-media/rewind-common";
 
 export const CronLogger = RootLogger.getChildCategory("Cron");

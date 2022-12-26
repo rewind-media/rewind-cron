@@ -1,4 +1,4 @@
-import { runCron } from "./Cron";
+import { runCron } from "./Cron.js";
 import {
   Database,
   loadDbConfig,

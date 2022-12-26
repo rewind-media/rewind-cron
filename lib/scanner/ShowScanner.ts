@@ -1,11 +1,11 @@
 import fs from "fs/promises";
 import Path, { ParsedPath } from "path";
-import { FfProbeInfo, getInfo } from "../util/ffprobe";
-import { Scanner } from "./models";
+import { FfProbeInfo, getInfo } from "../util/ffprobe.js";
+import { Scanner } from "./models.js";
 import { FFProbeStream } from "ffprobe";
 import { Dirent } from "fs";
 import { Database, mkFileId } from "@rewind-media/rewind-common";
-import { CronLogger } from "../log";
+import { CronLogger } from "../log.js";
 import {
   ImageInfo,
   Library,
@@ -14,36 +14,24 @@ import {
   SeriesDetails,
   SeasonInfo,
 } from "@rewind-media/rewind-protocol";
-import {
-  any,
-  filter,
-  first,
-  flow,
-  identity,
-  map,
-  max,
-  negate,
-  sum,
-} from "lodash/fp";
 import { emptyPromise, filterNotNil, mapSeries } from "cantaloupe";
 import { XMLParser } from "fast-xml-parser";
+import { List } from "immutable";
 
 const log = CronLogger.getChildCategory("ShowScanner");
 
 // const sum = reduce((acc, element) => acc + element, 0);
-
-const isVideoStream = any(
-  (it: FFProbeStream) => it.codec_type?.toLowerCase() == "video"
-);
+const isVideoStream = (streams: FFProbeStream[]) =>
+  List(streams).find(
+    (it: FFProbeStream) => it.codec_type?.toLowerCase() == "video"
+  );
 
 function extractDuration(ffProbeInfo: FfProbeInfo): number {
   return (
-    max(
-      flow(
-        map<FFProbeStream, number | undefined>((it) => it.duration),
-        filter<number>(identity)
-      )(ffProbeInfo.streams)
-    ) ??
+    List(ffProbeInfo.streams)
+      .map((it) => it.duration)
+      .filter((it) => it)
+      .max() ??
     ffProbeInfo.format.duration ??
     0
   );
@@ -65,19 +53,25 @@ export class ShowScanner extends Scanner {
 
   scan(): Promise<number> {
     const start = new Date();
-    return mapSeries((rootPath: string) => {
-      log.info(`Scanning ${rootPath}`);
-      return fs
-        .readdir(rootPath, { withFileTypes: true })
-        .then(filter((dirEntry) => dirEntry.isDirectory()))
-        .then((dirEntries) =>
-          mapSeries((dirEntry: Dirent) =>
-            this.scanShow(dirEntry.name, rootPath)
-          )(dirEntries)
-        )
-        .then(sum);
-    })(this.library.rootPaths)
-      .then(sum)
+    return List(this.library.rootPaths)
+      .map((rootPath: string) => {
+        log.info(`Scanning ${rootPath}`);
+        return fs
+          .readdir(rootPath, { withFileTypes: true })
+          .then((dirEntries) =>
+            List(dirEntries)
+              .filter((it) => it.isDirectory())
+              .map((dirEntry) => this.scanShow(dirEntry.name, rootPath))
+              .reduce(
+                (acc, val) => acc.then(async (accVal) => accVal + (await val)),
+                Promise.resolve(0)
+              )
+          );
+      })
+      .reduce(
+        (acc, val) => acc.then(async (accVal) => accVal + (await val)),
+        Promise.resolve(0)
+      )
       .then((upsertedRows) =>
         Promise.all([
           this.db.cleanEpisodes(start, this.library.name),
@@ -104,17 +98,27 @@ export class ShowScanner extends Scanner {
     return fs
       .readdir(path, { withFileTypes: true })
       .then(async (dirEntries) => {
-        const dirs = dirEntries.filter((dirEntry) => dirEntry.isDirectory());
-        const count = await mapSeries((dir: Dirent) =>
-          this.scanSeason(showId, Path.resolve(path, dir.name))
-        )(dirs)
-          .then(sum)
-          .catch((reason) => {
-            log.error(
-              `Error scanning show in ${this.library.name}: ${rootPath}/${showName}: ${reason}`
-            );
-            return 0;
-          });
+        const count = await List(dirEntries)
+          .filter((dirEntry) => dirEntry.isDirectory())
+          .map((dir: Dirent) =>
+            this.scanSeason(showId, Path.resolve(path, dir.name))
+          )
+          .reduce(
+            async (acc, val) => (await acc) + (await val),
+            Promise.resolve(0)
+          );
+
+        // const dirs = dirEntries.filter((dirEntry) => dirEntry.isDirectory());
+        // const count = await mapSeries((dir: Dirent) =>
+        //   this.scanSeason(showId, Path.resolve(path, dir.name))
+        // )(dirs)
+        //   .then(sum)
+        //   .catch((reason) => {
+        //     log.error(
+        //       `Error scanning show in ${this.library.name}: ${rootPath}/${showName}: ${reason}`
+        //     );
+        //     return 0;
+        //   });
         if (count > 0) {
           const seriesImageInfo = this.extractImageInfo(
             dirEntries,
@@ -122,14 +126,10 @@ export class ShowScanner extends Scanner {
             "folder"
           );
 
-          const bannerImageInfo = first(
-            flow(
-              map((name: string) =>
-                this.extractImageInfo(dirEntries, path, name)
-              ),
-              filterNotNil
-            )(["backdrop", "banner"])
-          );
+          const bannerImageInfo = List(["backdrop", "banner"])
+            .map((name) => this.extractImageInfo(dirEntries, path, name))
+            .filter((it) => it)
+            .first();
 
           await mapSeries((it: ImageInfo) => this.db.upsertImage(it))(
             filterNotNil([bannerImageInfo, seriesImageInfo])
@@ -191,7 +191,7 @@ export class ShowScanner extends Scanner {
     return this.separateSeasonFiles(seasonPath).then(
       ({ metadataFiles, dataFiles }) =>
         this.scanDataFiles(dataFiles, showId, seasonId, seasonPath)
-          .then(sum)
+          .then((counts) => List(counts).reduce((a, b) => a + b, 0))
           .then(async (count) => {
             if (count > 0) {
               await this.persistSeasonMetadata(
@@ -301,52 +301,53 @@ export class ShowScanner extends Scanner {
           (it) => it.isFile() && !Object.values(metadataFiles).includes(it)
         );
 
-        return flow(
-          filter(
-            negate((it: Dirent) => {
+        return Promise.all(
+          List(remainingFiles)
+            .filter((it) => {
               const parsedPath = Path.parse(it.name);
-              return (
+              return !(
                 ShowScanner.isNfoFile(parsedPath) ||
                 ShowScanner.isSubtitlesFile(parsedPath) ||
                 ShowScanner.isImageFile(parsedPath)
               );
             })
-          ),
-          mapSeries(async (it: Dirent) => {
-            const absPath = Path.resolve(seasonPath, it.name);
-            const id = mkFileId(absPath, this.library.name);
-            const lastModified = await fs
-              .stat(absPath)
-              .then(
-                (stat) =>
-                  new Date(
-                    Math.max(stat.mtimeMs, stat.ctimeMs, stat.birthtimeMs)
-                  )
-              );
-            log.debug(`${absPath} was last modified ${lastModified}`);
-
-            return this.db.getEpisode(id).then((episodeInfo) =>
-              episodeInfo && episodeInfo.lastUpdated > lastModified
-                ? Promise.resolve(mkVideoFile(id, it, episodeInfo.info, false))
-                : getInfo(absPath)
-                    .then((ffProbeInfo) =>
-                      mkVideoFile(id, it, ffProbeInfo, true)
+            .map(async (it: Dirent) => {
+              const absPath = Path.resolve(seasonPath, it.name);
+              const id = mkFileId(absPath, this.library.name);
+              const lastModified = await fs
+                .stat(absPath)
+                .then(
+                  (stat) =>
+                    new Date(
+                      Math.max(stat.mtimeMs, stat.ctimeMs, stat.birthtimeMs)
                     )
-                    .catch((err) => {
-                      log.error(
-                        `Error scanning possible video file at ${absPath}: ${err}`
-                      );
-                      return null;
-                    })
-            );
-          })
-        )(remainingFiles)
+                );
+              log.debug(`${absPath} was last modified ${lastModified}`);
+
+              return this.db.getEpisode(id).then((episodeInfo) =>
+                episodeInfo && episodeInfo.lastUpdated > lastModified
+                  ? Promise.resolve(
+                      mkVideoFile(id, it, episodeInfo.info, false)
+                    )
+                  : getInfo(absPath)
+                      .then((ffProbeInfo) =>
+                        mkVideoFile(id, it, ffProbeInfo, true)
+                      )
+                      .catch((err) => {
+                        log.error(
+                          `Error scanning possible video file at ${absPath}: ${err}`
+                        );
+                        return null;
+                      })
+              );
+            })
+            .toArray()
+        )
           .then(filterNotNil)
           .then((files: VideoFile[]) => {
-            const videoFiles = flow(
-              filter(identity), // TODO filterNotVoid
-              filter<VideoFile>((it) => isVideo(it.ffProbeInfo))
-            )(files);
+            const videoFiles = List(files)
+              .filter((it) => it && isVideo(it.ffProbeInfo))
+              .toArray();
 
             return this.extractSeasonFiles(
               metadataFiles,
@@ -410,9 +411,9 @@ export class ShowScanner extends Scanner {
       "folder"
     );
 
-    const seasonNfoFile = first(
-      dirEntries.filter((it) => it.isFile() && it.name == "season.nfo")
-    );
+    const seasonNfoFile = List(dirEntries)
+      .filter((it) => it.isFile() && it.name == "season.nfo")
+      .first();
 
     return {
       folderImage: folderImage,
@@ -478,15 +479,15 @@ export class ShowScanner extends Scanner {
     remainingFiles: Dirent[],
     videoParsePath: ParsedPath
   ) {
-    return first(
-      filter<Dirent>((it) => {
+    return List(remainingFiles)
+      .filter((it) => {
         const parsedPath = Path.parse(it.name);
         return (
           parsedPath.name == videoParsePath.name &&
           ShowScanner.isNfoFile(parsedPath)
         );
-      })(remainingFiles)
-    );
+      })
+      .first();
   }
 
   private async parseEpisodeNfo(
@@ -515,11 +516,9 @@ export class ShowScanner extends Scanner {
     dirEntries: Dirent[],
     path: string
   ): Promise<SeriesDetails | undefined> {
-    const nfoFile = first(
-      dirEntries.filter(
-        (it) => it.isFile() && it.name.toLowerCase() == "tvshow.nfo"
-      )
-    );
+    const nfoFile = List(dirEntries)
+      .filter((it) => it.isFile() && it.name.toLowerCase() == "tvshow.nfo")
+      .first();
     return nfoFile
       ? this.parseSeriesNfo(Path.resolve(path, nfoFile.name))
       : undefined;

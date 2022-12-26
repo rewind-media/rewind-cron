@@ -1,19 +1,18 @@
 import { CronJob } from "cron";
-import { FileScanner } from "./scanner/FileScanner";
-import { ShowScanner } from "./scanner/ShowScanner";
-import { CronLogger as log } from "./log";
+import { FileScanner } from "./scanner/FileScanner.js";
+import { ShowScanner } from "./scanner/ShowScanner.js";
+import { CronLogger as log } from "./log.js";
 import { Library, LibraryType } from "@rewind-media/rewind-protocol";
 import { Database } from "@rewind-media/rewind-common";
-import { flow, map } from "lodash/fp";
-import { filterNotNil, mapSeries } from "cantaloupe";
+import { List } from "immutable";
 
 export function runCron(db: Database) {
   return new CronJob(
     "* * * 2 * *",
     () =>
       db.listLibraries().then((libraries) =>
-        flow(
-          map((library: Library) => {
+        List(libraries)
+          .map((library: Library) => {
             switch (library.type) {
               case LibraryType.File:
                 return new FileScanner(library, db);
@@ -25,10 +24,9 @@ export function runCron(db: Database) {
                 );
                 return null;
             }
-          }),
-          filterNotNil,
-          mapSeries((scanner) => scanner.scan())
-        )(libraries)
+          })
+          .filter((it) => it)
+          .map((scanner) => scanner?.scan())
       ),
     null,
     true,

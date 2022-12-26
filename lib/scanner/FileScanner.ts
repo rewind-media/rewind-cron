@@ -1,5 +1,5 @@
 import Path from "path";
-import { Scanner } from "./models";
+import { Scanner } from "./models.js";
 import { Database, mkFileId } from "@rewind-media/rewind-common";
 import klaw, { Item } from "klaw";
 import { Library } from "@rewind-media/rewind-protocol";

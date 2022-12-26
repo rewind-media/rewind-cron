@@ -1,7 +1,7 @@
 import { spawn } from "child_process";
 import { FFProbeResult } from "ffprobe";
 import { Stream } from "stream";
-import { CronLogger } from "../log";
+import { CronLogger } from "../log.js";
 
 const log = CronLogger.getChildCategory("ffmpeg.probe");
 
